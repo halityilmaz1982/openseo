@@ -18,6 +18,8 @@ const schema = z.object({
     .string()
     .refine((v) => Buffer.from(v, "base64").length === 32, "ENCRYPTION_KEY must be 32 bytes, base64-encoded"),
   YEPAPI_BASE_URL: z.string().url().default("https://api.yepapi.com"),
+  // "true": nobody can create a new account (self-hosted instance for one team). Existing users still sign in.
+  DISABLE_SIGNUP: z.enum(["true", "false"]).default("false"),
   // Set to "false" to run the HTTP server without the background worker.
   RUN_WORKER: z.enum(["true", "false"]).default("true"),
   // Proxies in front of the API whose X-Forwarded-For is trusted for the client's address. 0 by

@@ -19,7 +19,8 @@ export const auth = betterAuth({
       verification: schema.verification,
     },
   }),
-  emailAndPassword: { enabled: true, minPasswordLength: 8 },
+  // DISABLE_SIGNUP=true closes sign-up: the sign-up endpoint answers with an error, sign-in keeps working.
+  emailAndPassword: { enabled: true, minPasswordLength: 8, disableSignUp: env.DISABLE_SIGNUP === "true" },
   session: { expiresIn: 60 * 60 * 24 * 30, updateAge: 60 * 60 * 24 },
   // Sign-ups and sign-ins for product analytics (lib/analytics.ts); nothing is sent without POSTHOG_KEY.
   databaseHooks: {
