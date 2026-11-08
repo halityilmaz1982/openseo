@@ -53,6 +53,15 @@ const schema = z.object({
   // Sent as the developer-token header when set. Google retired developer tokens on 2026-09-09 (access now
   // belongs to the Cloud project); kept for servers whose project still has one.
   GOOGLE_ADS_DEVELOPER_TOKEN: z.string().min(10).optional(),
+  // TEY fork: Meta (Facebook/Instagram) ads, read only. With an app ID and secret, users connect with
+  // Facebook (redirect URI ${APP_URL}/api/meta/callback; tokens last 60 days); without, they paste a
+  // system-user token from Business settings, which does not expire. The secret also signs calls
+  // (appsecret_proof).
+  META_APP_ID: z.string().regex(/^\d+$/).optional(),
+  META_APP_SECRET: z.string().min(16).optional(),
+  META_GRAPH_VERSION: z.string().regex(/^v\d+\.\d$/).default("v26.0"),
+  // Tests and development: send every Meta request to this server instead.
+  META_API_BASE_URL: z.string().url().optional(),
   // Tests and development: send every Google request to this server instead.
   GOOGLE_API_BASE_URL: z.string().url().optional(),
   // IndexNow's shared endpoint, which passes submissions on to Bing, Yandex, Seznam, Naver and Yep.

@@ -71,6 +71,13 @@
       "when": 1794166132710,
       "tag": "0009_tey_ga4_and_ads",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794168390026,
+      "tag": "0010_tey_meta_connections",
+      "breakpoints": true
     }
   ]
 }

@@ -159,6 +159,33 @@ export const googleAccounts = pgTable(
 );
 
 /** The Search Console property a project reads. One per project. */
+// ── TEY fork: Meta (Facebook/Instagram) ads logins ──────────────────────────
+
+/**
+ * A Meta access token a user gave OpenSEO: from "Continue with Facebook" (kind "user", 60 days) or
+ * pasted from Business settings (kind "token", usually a system user that does not expire).
+ * Encrypted like Google tokens. Project connections are in meta_connections (project database).
+ */
+export const metaAccounts = pgTable(
+  "meta_accounts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    kind: text("kind").$type<"user" | "token">().notNull(),
+    // Meta's ID for the person or system user the token belongs to.
+    metaUserId: text("meta_user_id").notNull(),
+    name: text("name"),
+    tokenEnc: text("token_enc").notNull(),
+    // Null: no known expiry (system-user tokens).
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("meta_accounts_unique").on(t.userId, t.metaUserId)],
+);
+
 // ── OAuth for MCP clients (ChatGPT and others) ──────────────────────────────
 
 /** A client that registered itself (RFC 7591). Public clients only: PKCE, no secret. */

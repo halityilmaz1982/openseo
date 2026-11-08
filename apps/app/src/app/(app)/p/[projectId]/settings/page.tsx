@@ -4,6 +4,7 @@ import { ExternalLink } from "lucide-react";
 import { useParams, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import { ProjectDetails } from "@/components/project-details";
+import { META_ERRORS, MetaCard } from "@/components/meta/connection";
 import { connectUrl, GoogleAccountsCard, LINK_ERRORS, PRODUCT, type Provider, ProviderCard, useGoogleState } from "@/components/google/connection";
 import { Note } from "@/components/tracking/kit";
 import { EmptyState, ErrorNote, PageHeader, Spinner } from "@/components/ui";
@@ -16,16 +17,20 @@ function ProjectSettings() {
   const project = useProject(projectId);
   const linkError = params.get("google_error");
   const linked = params.get("google_connected") as Provider | null;
+  const metaError = params.get("meta_error");
+  const metaLinked = params.get("meta_connected");
   const state = google.data;
 
   return (
     <>
-      <PageHeader title="Project settings" description="The project's website and market, and the Google connections it reads from." />
+      <PageHeader title="Project settings" description="The project's website and market, and the Google and Meta connections it reads from." />
       <div className="space-y-6">
         {project.data && <ProjectDetails key={`${project.data.id}:${project.data.locationCode}:${project.data.country}`} project={project.data} />}
         <ErrorNote error={project.error} />
         {linkError && <ErrorNote error={new Error(LINK_ERRORS[linkError] ?? "Connecting Google failed. Try again.")} />}
         {linked && PRODUCT[linked] && <Note>Google account connected for {PRODUCT[linked]}. Choose the property this project should read.</Note>}
+        {metaError && <ErrorNote error={new Error(META_ERRORS[metaError] ?? "Connecting Meta failed. Try again.")} />}
+        {metaLinked && <Note>Meta login added. Choose the ad account this project should read, under Meta Ads.</Note>}
         {google.isPending && <Spinner />}
         <ErrorNote error={google.error} />
         {state && !state.configured && (
@@ -56,6 +61,8 @@ function ProjectSettings() {
             </p>
           </>
         )}
+        {/* TEY fork: Meta works without Google, so it is outside the Google block. */}
+        <MetaCard projectId={projectId} />
       </div>
     </>
   );

@@ -198,7 +198,7 @@ function buildServer(app: FastifyInstance, authorization: string): McpServer {
       } catch (error) {
         const message = error instanceof Error ? error.message : "Tool failed";
         // The REST message points to the dashboard; an agent also needs the tool that checks it.
-        if (/^Connect Google (Search Console|Analytics|Ads)/.test(message)) return fail(`${message} Check with get_google_connections; only the user can connect Google, in the OpenSEO dashboard.`);
+        if (/^Connect (Google (Search Console|Analytics|Ads)|a Meta ad account)/.test(message)) return fail(`${message} Check with get_google_connections; only the user can connect Google, in the OpenSEO dashboard.`);
         return fail(message);
       }
     }) as never);
@@ -647,11 +647,13 @@ function buildServer(app: FastifyInstance, authorization: string): McpServer {
   };
   tool(
     "get_google_connections",
-    "Whether the project has Google Search Console, Google Analytics 4 and Google Ads connected, and which property or ad account. If not, ask the user to connect them in the dashboard under Project settings; agents cannot connect them.",
+    "Whether the project has Google Search Console, Google Analytics 4, Google Ads and a Meta ad account connected, and which property or ad account. If not, ask the user to connect them in the dashboard under Project settings; agents cannot connect them.",
     { project_id: projectId },
     async (a) => {
-      const data = (await rest("GET", `/projects/${await resolveProject(a.project_id)}/google`)) as Json;
-      return { configured: data.configured, gsc: data.gsc, ga4: data.ga4, ads: data.ads };
+      const id = await resolveProject(a.project_id);
+      const data = (await rest("GET", `/projects/${id}/google`)) as Json;
+      const meta = (await rest("GET", `/projects/${id}/meta`)) as Json;
+      return { configured: data.configured, gsc: data.gsc, ga4: data.ga4, ads: data.ads, meta: meta.connection };
     },
     true,
   );
@@ -759,6 +761,28 @@ function buildServer(app: FastifyInstance, authorization: string): McpServer {
     "Google Ads spend, clicks, impressions, conversions and value per campaign per day between two dates (YYYY-MM-DD, at most 93 days), in the ad account's time zone. Read only. Free.",
     { project_id: projectId, from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) },
     async (a) => rest("GET", `/projects/${await pid(a.project_id)}/ads/campaign-daily?${new URLSearchParams({ from: a.from, to: a.to })}`),
+    true,
+  );
+
+  tool(
+    "get_meta_overview",
+    "Meta (Facebook and Instagram) ads spend, impressions, link clicks, purchases, purchase value and leads of the project's ad account for the period against the one before, with link CTR, cost per link click, CPM, cost per purchase, ROAS and a daily series. Read only. Free.",
+    { project_id: projectId, range: ga4Range },
+    async (a) => rest("GET", `/projects/${await pid(a.project_id)}/meta/overview?range=${a.range ?? "last_28_days"}`),
+    true,
+  );
+  tool(
+    "get_meta_campaigns",
+    "Meta ads campaigns with delivery in the period, most spend first: status, objective, budget, spend, link clicks, purchases, value, leads, cost per purchase and ROAS. Read only. Free.",
+    { project_id: projectId, range: ga4Range },
+    async (a) => rest("GET", `/projects/${await pid(a.project_id)}/meta/campaigns?range=${a.range ?? "last_28_days"}`),
+    true,
+  );
+  tool(
+    "get_meta_campaign_daily",
+    "Meta ads spend, impressions, link clicks, purchases, value and leads per campaign per day between two dates (YYYY-MM-DD, at most 93 days), in the ad account's time zone. Read only. Free.",
+    { project_id: projectId, from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) },
+    async (a) => rest("GET", `/projects/${await pid(a.project_id)}/meta/campaign-daily?${new URLSearchParams({ from: a.from, to: a.to })}`),
     true,
   );
 

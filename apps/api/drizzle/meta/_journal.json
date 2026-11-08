@@ -57,6 +57,13 @@
       "when": 1792987761251,
       "tag": "0007_drop_ga4_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1794168389258,
+      "tag": "0008_tey_meta_accounts",
+      "breakpoints": true
     }
   ]
 }

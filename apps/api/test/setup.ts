@@ -11,7 +11,7 @@
 import { fileURLToPath } from "node:url";
 import { LOCATIONS_URL } from "@openseo/yepapi";
 import { afterAll, vi } from "vitest";
-import { FAKE_CLIENT_ID, startFakeGoogle } from "../src/testing/fake-google";
+import { FAKE_CLIENT_ID, FAKE_META_APP_ID, FAKE_META_SECRET, startFakeGoogle } from "../src/testing/fake-google";
 import { startFakeYepApi } from "../src/testing/fake-yepapi";
 import { harness } from "./harness";
 
@@ -34,6 +34,9 @@ Object.assign(process.env, {
   GOOGLE_CLIENT_SECRET: "fake-client-secret",
   GOOGLE_API_BASE_URL: google.url,
   INDEXNOW_ENDPOINT: `${google.url}/indexnow/indexnow`,
+  META_APP_ID: FAKE_META_APP_ID,
+  META_APP_SECRET: FAKE_META_SECRET,
+  META_API_BASE_URL: google.url,
 });
 
 vi.mock("../src/db", async () => {

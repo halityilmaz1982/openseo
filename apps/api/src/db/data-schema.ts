@@ -574,6 +574,24 @@ export const adsConnections = pgTable("ads_connections", {
   createdAt: createdAt(),
 });
 
+/**
+ * TEY fork: the Meta ad account a project reads. One per project. `metaAccountId` points at the
+ * token (meta_accounts, core database), so it carries no foreign key; removing the token deletes
+ * these rows in code (services/meta.ts). Reports read Meta live.
+ */
+export const metaConnections = pgTable("meta_connections", {
+  projectId: uuid("project_id")
+    .primaryKey()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  metaAccountId: uuid("meta_account_id").notNull(),
+  // "act_1234567890"
+  adAccountId: text("ad_account_id").notNull(),
+  name: text("name").notNull(),
+  currency: text("currency"),
+  timeZone: text("time_zone"),
+  createdAt: createdAt(),
+});
+
 // ── Stored Search Console data ──────────────────────────────────────────────
 
 /**

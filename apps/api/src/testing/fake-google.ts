@@ -16,12 +16,20 @@
  *   ("HSM Ads", reachable only through the manager, so the login-customer-id header is checked) and
  *   4445556666 ("Direct Shop", also directly accessible); 9990001111 is cancelled and fails.
  *   Search results come 25 rows a page.
+ * - TEY fork, Meta under /graph/<version>/ (META_API_BASE_URL = this server): the code exchange gives
+ *   "short-<code>", the 60-day swap "long-<short>". Pasted tokens: "sys-…" is a system user,
+ *   "expired-…" fails with code 190, "noads-…" has ads_read declined. appsecret_proof is checked
+ *   against FAKE_META_SECRET when sent. Ad accounts act_111 and act_222 work; act_333 is closed and
+ *   its insights fail with (#274). Lists come 30 rows a page.
  * - Data is made up and deterministic. Nothing here reflects real search data.
  */
+import { createHmac } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
 export const FAKE_CLIENT_ID = "fake-client.apps.googleusercontent.com";
+export const FAKE_META_APP_ID = "123456789";
+export const FAKE_META_SECRET = "fake-meta-secret-0123456789";
 
 const b64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
 const idToken = (sub: string, email: string) => `${b64({ alg: "none" })}.${b64({ iss: "https://accounts.google.com", aud: FAKE_CLIENT_ID, sub, email, exp: Math.floor(Date.now() / 1000) + 3600 })}.sig`;
@@ -153,6 +161,87 @@ function adsSearch(customerId: string, query: string): unknown[] {
   return [];
 }
 
+/** Fake Meta insight metrics for one key; campaigns without sales (awareness) report no purchases. */
+function metaInsight(key: string, sales = true) {
+  const h = hash(key);
+  const linkClicks = 20 + (h % 200);
+  const buys = sales ? 1 + (h % 6) : 0;
+  return {
+    spend: (100 + (h % 900) + (h % 100) / 100).toFixed(2),
+    impressions: String(2000 + (h % 20000)),
+    clicks: String(linkClicks + (h % 30)),
+    inline_link_clicks: String(linkClicks),
+    actions: [
+      { action_type: "link_click", value: String(linkClicks) },
+      ...(buys ? [{ action_type: "omni_purchase", value: String(buys) }, { action_type: "purchase", value: String(buys) }] : []),
+      ...(sales ? [] : [{ action_type: "lead", value: String(1 + (h % 5)) }]),
+    ],
+    action_values: buys ? [{ action_type: "omni_purchase", value: (buys * 350).toFixed(2) }, { action_type: "purchase", value: (buys * 350).toFixed(2) }] : [],
+  };
+}
+
+const META_CAMPAIGNS = [
+  { id: "c1", name: "HSM Satış", effective_status: "ACTIVE", objective: "OUTCOME_SALES", daily_budget: "25000", sales: true },
+  { id: "c2", name: "HSM Bilinirlik", effective_status: "PAUSED", objective: "OUTCOME_AWARENESS", lifetime_budget: "100000", sales: false },
+];
+const META_PAGE = 30;
+
+/** Answers one Graph API GET, or null when the path is not faked. */
+function metaGraph(path: string, q: URLSearchParams, origin: string): { status: number; body: unknown } | null {
+  const token = q.get("access_token") ?? "";
+  const fail = (status: number, code: number, message: string) => ({ status, body: { error: { message, type: "OAuthException", code, fbtrace_id: "fake" } } });
+  const proof = q.get("appsecret_proof");
+  if (proof && proof !== createHmac("sha256", FAKE_META_SECRET).update(token).digest("hex")) return fail(400, 100, "Invalid appsecret_proof provided in the API argument");
+  const page = (rows: unknown[]) => {
+    const start = Number(q.get("after") ?? 0);
+    const next = new URLSearchParams(q);
+    next.set("after", String(start + META_PAGE));
+    return { status: 200, body: { data: rows.slice(start, start + META_PAGE), ...(start + META_PAGE < rows.length ? { paging: { next: `${origin}/graph/v26.0${path}?${next}` } } : {}) } };
+  };
+
+  if (path === "/oauth/access_token") {
+    if (q.get("grant_type") === "fb_exchange_token") return { status: 200, body: { access_token: `long-${q.get("fb_exchange_token")}`, token_type: "bearer", expires_in: 5_184_000 } };
+    if (q.get("client_id") !== FAKE_META_APP_ID || q.get("client_secret") !== FAKE_META_SECRET || !q.get("redirect_uri")) return fail(400, 101, "Error validating application.");
+    if (String(q.get("code")).includes("bad")) return fail(400, 100, "Invalid verification code format.");
+    return { status: 200, body: { access_token: `short-${q.get("code")}`, token_type: "bearer", expires_in: 5000 } };
+  }
+  if (path === "/debug_token") {
+    if (token !== `${FAKE_META_APP_ID}|${FAKE_META_SECRET}`) return fail(400, 190, "Invalid OAuth access token.");
+    return { status: 200, body: { data: { is_valid: true, expires_at: String(q.get("input_token")).startsWith("sys-") ? 0 : Math.floor(Date.now() / 1000) + 30 * 86_400 } } };
+  }
+  if (token.startsWith("expired")) return fail(400, 190, "Error validating access token: Session has expired.");
+  if (!/^(sys-|long-|noads-)/.test(token)) return fail(400, 190, "Invalid OAuth access token.");
+  if (path === "/me/permissions") {
+    return { status: 200, body: { data: [{ permission: "public_profile", status: "granted" }, { permission: "ads_read", status: token.startsWith("noads") ? "declined" : "granted" }] } };
+  }
+  if (path === "/me") return { status: 200, body: token.startsWith("sys-") ? { id: "20002", name: "TEY Sistem Kullanıcısı" } : { id: "10001", name: "Halit Ajans" } };
+  if (path === "/me/adaccounts") {
+    return page([
+      { id: "act_111", name: "HSM Meta", currency: "TRY", timezone_name: "Europe/Istanbul", account_status: 1, business: { id: "b1", name: "TEY Bilişim" } },
+      { id: "act_333", name: "Eski Hesap", currency: "TRY", timezone_name: "Europe/Istanbul", account_status: 101 },
+      ...Array.from({ length: 30 }, (_, i) => ({ id: `act_9${String(i).padStart(2, "0")}`, name: `Müşteri ${i + 1}`, currency: "TRY", timezone_name: "Europe/Istanbul", account_status: 1, business: { id: "b2", name: "Partner" } })),
+      { id: "act_222", name: "Butik Moda", currency: "EUR", timezone_name: "Europe/Berlin", account_status: 1, business: { id: "b2", name: "Partner" } },
+    ]);
+  }
+  const campaigns = path.match(/^\/(act_\d+)\/campaigns$/);
+  if (campaigns) return page(META_CAMPAIGNS.map(({ sales: _sales, ...c }) => c));
+  const insights = path.match(/^\/(act_\d+)\/insights$/);
+  if (insights) {
+    const act = insights[1]!;
+    if (act === "act_333") return fail(400, 274, "(#274) The ad account is not enabled for usage in Ads API.");
+    const range = JSON.parse(q.get("time_range") ?? "{}") as { since: string; until: string };
+    const days: string[] = [];
+    for (let t = Date.parse(range.since); t <= Date.parse(range.until); t += 86_400_000) days.push(new Date(t).toISOString().slice(0, 10));
+    const daily = q.get("time_increment") === "1";
+    const slots = daily ? days.map((d) => ({ date_start: d, date_stop: d })) : [{ date_start: range.since, date_stop: range.until }];
+    if (q.get("level") === "campaign") {
+      return page(slots.flatMap((slot) => META_CAMPAIGNS.map((c) => ({ ...slot, campaign_id: c.id, campaign_name: c.name, ...metaInsight(`${act}|${c.id}|${slot.date_start}|${slot.date_stop}`, c.sales) }))));
+    }
+    return page(slots.map((slot) => ({ ...slot, ...metaInsight(`${act}|${slot.date_start}|${slot.date_stop}`) })));
+  }
+  return null;
+}
+
 export type FakeGoogle = {
   server: Server;
   url: string;
@@ -211,6 +300,13 @@ export async function startFakeGoogle(port = 0): Promise<FakeGoogle> {
         if (body.key === "bad-key") return send(403, {});
         if ((body.urlList ?? []).some((u: string) => u.includes("slow-down"))) return send(429, {});
         return send(200, {});
+      }
+
+      // ── Meta Graph API (TEY fork) ──
+      const graph = path.match(/^\/graph\/v[\d.]+(\/.*)$/);
+      if (graph?.[1]) {
+        const answer = metaGraph(graph[1], new URL(req.url ?? "", "http://fake").searchParams, `http://${req.headers.host}`);
+        return answer ? send(answer.status, answer.body) : send(404, { error: { code: 803, message: `No fake for ${path}` } });
       }
 
       if (!token?.startsWith("at-")) return send(401, { error: { code: 401, message: "Request had invalid authentication credentials.", status: "UNAUTHENTICATED" } });

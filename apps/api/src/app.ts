@@ -12,6 +12,7 @@ import { aiRoutes } from "./routes/ai";
 import { auditRoutes } from "./routes/audit";
 import { googleRoutes } from "./routes/google";
 import { marketingRoutes } from "./routes/marketing";
+import { metaRoutes } from "./routes/meta";
 import { indexingRoutes } from "./routes/indexing";
 import { oauthPublicRoutes, oauthSessionRoutes } from "./routes/oauth";
 import { keywordRoutes } from "./routes/keywords";
@@ -117,6 +118,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       await api.register(localRoutes);
       await api.register(googleRoutes);
       await api.register(marketingRoutes);
+      await api.register(metaRoutes);
       await api.register(indexingRoutes);
       await api.register(oauthSessionRoutes);
     },
