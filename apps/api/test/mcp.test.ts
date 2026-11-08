@@ -33,13 +33,13 @@ describe("MCP server", () => {
     expect((await app.inject({ method: "GET", url: "/mcp" })).statusCode).toBe(405);
   });
 
-  it("initialises and lists all 76 tools, with spending controls on every lookup", async () => {
+  it("initialises and lists all 84 tools, with spending controls on every lookup", async () => {
     const { key } = await agent();
     const init = await rpc({ apiKey: key }, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1" } });
     expect(init.body.result.serverInfo.name).toBe("openseo");
     const { body } = await rpc({ apiKey: key }, "tools/list");
     const tools = body.result.tools as { name: string; inputSchema: { properties: Record<string, unknown> } }[];
-    expect(tools).toHaveLength(76);
+    expect(tools).toHaveLength(84);
     // Google tools are free and read-only.
     for (const name of ["get_google_connections", "get_search_performance", "get_search_console_rows", "inspect_urls", "get_search_opportunities"]) {
       const found = tools.find((t) => t.name === name) as { annotations?: { readOnlyHint?: boolean }; inputSchema: { properties: Record<string, unknown> } } | undefined;

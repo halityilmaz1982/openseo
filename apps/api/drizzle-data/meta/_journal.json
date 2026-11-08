@@ -64,6 +64,13 @@
       "when": 1793185883067,
       "tag": "0008_clean_gsc_query_prefixes",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794166132710,
+      "tag": "0009_tey_ga4_and_ads",
+      "breakpoints": true
     }
   ]
 }

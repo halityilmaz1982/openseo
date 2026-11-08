@@ -44,10 +44,15 @@ const schema = z.object({
   PUBLIC_TOOLS_DAILY_USD: z.coerce.number().min(0).default(2),
   PUBLIC_TOOLS_PER_DAY: z.coerce.number().int().min(1).max(1000).default(5),
 
-  // Optional: Google Search Console. An OAuth client from Google Cloud with
-  // ${APP_URL}/api/google/gsc/callback as the redirect URI.
+  // Optional: Google Search Console, Analytics (GA4) and Ads. An OAuth client from Google Cloud with
+  // ${APP_URL}/api/google/gsc/callback, /ga4/callback and /ads/callback as redirect URIs.
   GOOGLE_CLIENT_ID: z.string().min(1).optional(),
   GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
+  // Google Ads API version in the REST path. Google releases often and retires a version after about a year.
+  GOOGLE_ADS_API_VERSION: z.string().regex(/^v\d+$/).default("v26"),
+  // Sent as the developer-token header when set. Google retired developer tokens on 2026-09-09 (access now
+  // belongs to the Cloud project); kept for servers whose project still has one.
+  GOOGLE_ADS_DEVELOPER_TOKEN: z.string().min(10).optional(),
   // Tests and development: send every Google request to this server instead.
   GOOGLE_API_BASE_URL: z.string().url().optional(),
   // IndexNow's shared endpoint, which passes submissions on to Bing, Yandex, Seznam, Naver and Yep.

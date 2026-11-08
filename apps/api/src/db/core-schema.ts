@@ -131,9 +131,10 @@ export const usageLog = pgTable(
   (t) => [index("usage_user_time_idx").on(t.userId, t.createdAt)],
 );
 
-// ── Google Search Console ───────────────────────────────────────────────────
+// ── Google: Search Console, Analytics (GA4) and Ads ─────────────────────────
 
-export type GoogleProvider = "gsc";
+// TEY fork: GA4 (analytics.readonly) and Google Ads (adwords) are back next to Search Console.
+export type GoogleProvider = "gsc" | "ga4" | "ads";
 
 /** A user's grant from one Google account for one product. Read-only scopes; tokens encrypted. */
 export const googleAccounts = pgTable(

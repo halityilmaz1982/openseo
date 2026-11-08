@@ -539,6 +539,41 @@ export const gscConnections = pgTable("gsc_connections", {
   createdAt: createdAt(),
 });
 
+/**
+ * TEY fork: the GA4 property a project reads. One per project. Reports read Google live
+ * (services/analytics.ts); nothing from the property is stored.
+ */
+export const ga4Connections = pgTable("ga4_connections", {
+  projectId: uuid("project_id")
+    .primaryKey()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  googleAccountId: uuid("google_account_id").notNull(),
+  // "properties/123456789"
+  propertyId: text("property_id").notNull(),
+  displayName: text("display_name").notNull(),
+  timeZone: text("time_zone"),
+  currencyCode: text("currency_code"),
+  createdAt: createdAt(),
+});
+
+/**
+ * TEY fork: the Google Ads account a project reads. One per project. `loginCustomerId` is the
+ * manager account (MCC) the access goes through, or the account itself when the Google user has
+ * direct access. Ten-digit IDs without dashes. Reports read Google live (services/ads.ts).
+ */
+export const adsConnections = pgTable("ads_connections", {
+  projectId: uuid("project_id")
+    .primaryKey()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  googleAccountId: uuid("google_account_id").notNull(),
+  customerId: text("customer_id").notNull(),
+  loginCustomerId: text("login_customer_id").notNull(),
+  descriptiveName: text("descriptive_name").notNull(),
+  timeZone: text("time_zone"),
+  currencyCode: text("currency_code"),
+  createdAt: createdAt(),
+});
+
 // ── Stored Search Console data ──────────────────────────────────────────────
 
 /**

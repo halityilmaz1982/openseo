@@ -11,6 +11,11 @@
  * - URL inspection says "Crawled - currently not indexed" for URLs containing "not-indexed".
  * - Also stands in for IndexNow at /indexnow/indexnow: a key of "bad-key" gets 403, a URL list
  *   containing "slow-down" gets 429, anything else 200.
+ * - TEY fork: a code containing "ga4" grants Analytics (analytics.readonly), one containing "ads"
+ *   grants Google Ads (adwords). Ads: manager 1112223333 ("TEY MCC") with clients 7778889999
+ *   ("HSM Ads", reachable only through the manager, so the login-customer-id header is checked) and
+ *   4445556666 ("Direct Shop", also directly accessible); 9990001111 is cancelled and fails.
+ *   Search results come 25 rows a page.
  * - Data is made up and deterministic. Nothing here reflects real search data.
  */
 import { createServer, type Server } from "node:http";
@@ -63,11 +68,96 @@ function gscRows(body: { dimensions?: string[]; startDate: string; endDate: stri
   return rows.slice(start, start + (body.rowLimit ?? 1000));
 }
 
+/** Fake GA4 Data API report: one row per combination of the requested dimensions (and date range). */
+function ga4Report(body: { dateRanges?: unknown[]; dimensions?: { name: string }[]; metrics?: { name: string }[]; limit?: number }) {
+  const ranges = body.dateRanges?.length ?? 1;
+  const dims = (body.dimensions ?? []).map((d) => d.name);
+  const metrics = (body.metrics ?? []).map((m) => m.name);
+  const dimensionHeaders = [...dims, ...(ranges > 1 ? ["dateRange"] : [])].map((name) => ({ name }));
+  const values: Record<string, string[]> = {
+    date: Array.from({ length: 28 }, (_, i) => `202610${String(i + 1).padStart(2, "0")}`),
+    hostName: ["www.acme.com"],
+    landingPage: PAGES,
+    sessionDefaultChannelGroup: ["Organic Search", "Paid Search", "Direct", "Paid Social"],
+    sessionSource: ["google", "facebook"],
+    sessionMedium: ["organic", "cpc"],
+    sessionCampaignName: ["(organic)", "brand-search"],
+  };
+  let combos: string[][] = [[]];
+  for (const d of dims) combos = combos.flatMap((c) => (values[d] ?? ["(not set)"]).map((v) => [...c, v]));
+  const rows = combos.flatMap((keys) =>
+    Array.from({ length: ranges }, (_, r) => {
+      const h = hash(keys.join("|") + r);
+      const metric = (name: string) => {
+        if (name.endsWith("Rate")) return ((h % 60) / 100 + 0.1).toFixed(4);
+        if (name === "purchaseRevenue") return ((h % 5000) / 10).toFixed(2);
+        return String(20 + (h % 400));
+      };
+      return {
+        dimensionValues: [...keys, ...(ranges > 1 ? [`date_range_${r}`] : [])].map((value) => ({ value })),
+        metricValues: metrics.map((name) => ({ value: metric(name) })),
+      };
+    }),
+  );
+  return { dimensionHeaders, metricHeaders: metrics.map((name) => ({ name, type: "TYPE_INTEGER" })), rows: rows.slice(0, body.limit ?? 10000), rowCount: rows.length, metadata: { currencyCode: "TRY", timeZone: "Europe/Istanbul" } };
+}
+
+const ADS_CUSTOMERS: Record<string, { descriptiveName: string; currencyCode: string; timeZone: string; manager: boolean; direct: boolean; viaManager: boolean }> = {
+  "1112223333": { descriptiveName: "TEY MCC", currencyCode: "TRY", timeZone: "Europe/Istanbul", manager: true, direct: true, viaManager: false },
+  "7778889999": { descriptiveName: "HSM Ads", currencyCode: "TRY", timeZone: "Europe/Istanbul", manager: false, direct: false, viaManager: true },
+  "4445556666": { descriptiveName: "Direct Shop", currencyCode: "EUR", timeZone: "Europe/Berlin", manager: false, direct: true, viaManager: true },
+};
+const ADS_CAMPAIGNS = [
+  { id: "101", name: "HSM Arama", status: "ENABLED", advertisingChannelType: "SEARCH" },
+  { id: "102", name: "HSM PMax", status: "PAUSED", advertisingChannelType: "PERFORMANCE_MAX" },
+];
+const ADS_TERMS = ["e-ticaret sitesi kur", "sanal market", "hazır e-ticaret paketi", "migros sanal market"];
+const ADS_PAGE = 25;
+
+/** Metrics for one key: cost in micros and counts as strings, conversions as numbers, as the REST API sends them. A term with "market" in it never converts. */
+function adsMetrics(key: string) {
+  const h = hash(key);
+  const conversions = key.includes("market") ? 0 : 1 + (h % 7);
+  return { costMicros: String((50 + (h % 900)) * 1_000_000), clicks: String(10 + (h % 90)), impressions: String(200 + (h % 4000)), conversions, conversionsValue: conversions * 450 };
+}
+
+function adsSearch(customerId: string, query: string): unknown[] {
+  const between = query.match(/segments\.date BETWEEN '(\d{4}-\d{2}-\d{2})' AND '(\d{4}-\d{2}-\d{2})'/);
+  const days: string[] = [];
+  if (between) for (let t = Date.parse(between[1]!); t <= Date.parse(between[2]!); t += 86_400_000) days.push(new Date(t).toISOString().slice(0, 10));
+  const byDate = /SELECT segments\.date/.test(query);
+  const customer = ADS_CUSTOMERS[customerId]!;
+  if (/FROM customer_client/.test(query)) {
+    return Object.entries(ADS_CUSTOMERS)
+      .filter(([, c]) => c.viaManager)
+      .map(([id, c]) => ({ customerClient: { resourceName: `customers/${customerId}/customerClients/${id}`, id, descriptiveName: c.descriptiveName, currencyCode: c.currencyCode, timeZone: c.timeZone, manager: false, status: "ENABLED", testAccount: false } }));
+  }
+  if (/FROM customer LIMIT 1/.test(query)) return [{ customer: { resourceName: `customers/${customerId}`, id: customerId, descriptiveName: customer.descriptiveName, currencyCode: customer.currencyCode, timeZone: customer.timeZone, manager: customer.manager, testAccount: false } }];
+  if (/FROM customer WHERE/.test(query)) {
+    if (byDate) return days.map((date) => ({ segments: { date }, metrics: adsMetrics(`${customerId}|${date}`) }));
+    return [{ metrics: adsMetrics(`${customerId}|${days[0]}|${days.length}`) }];
+  }
+  if (/FROM campaign WHERE/.test(query)) {
+    if (byDate) return days.flatMap((date) => ADS_CAMPAIGNS.map((campaign) => ({ segments: { date }, campaign: { id: campaign.id, name: campaign.name }, metrics: adsMetrics(`${campaign.id}|${date}`) })));
+    return ADS_CAMPAIGNS.map((campaign) => ({ campaign, campaignBudget: { amountMicros: "250000000" }, metrics: adsMetrics(`${campaign.id}|${days[0]}`) }));
+  }
+  if (/FROM search_term_view/.test(query)) {
+    const limit = Number(query.match(/LIMIT (\d+)/)?.[1] ?? 10000);
+    return ADS_TERMS.map((term, i) => ({
+      searchTermView: { searchTerm: term, status: i === 0 ? "ADDED" : "NONE" },
+      campaign: { id: "101", name: "HSM Arama" },
+      adGroup: { name: "E-ticaret" },
+      metrics: adsMetrics(term),
+    })).slice(0, limit);
+  }
+  return [];
+}
+
 export type FakeGoogle = {
   server: Server;
   url: string;
-  /** Every request, in order: host-qualified path, form or JSON body, and the bearer token. */
-  requests: { path: string; body: any; token: string | null }[];
+  /** Every request, in order: host-qualified path, form or JSON body, the bearer token and Google Ads' login-customer-id header. */
+  requests: { path: string; body: any; token: string | null; loginCustomerId?: string }[];
   close(): Promise<void>;
 };
 
@@ -88,7 +178,8 @@ export async function startFakeGoogle(port = 0): Promise<FakeGoogle> {
       let body: any = {};
       if (req.headers["content-type"]?.includes("application/x-www-form-urlencoded")) body = Object.fromEntries(new URLSearchParams(raw));
       else if (raw) body = JSON.parse(raw);
-      requests.push({ path: req.url ?? path, body, token });
+      const loginCustomerId = typeof req.headers["login-customer-id"] === "string" ? req.headers["login-customer-id"] : undefined;
+      requests.push({ path: req.url ?? path, body, token, loginCustomerId });
 
       if (path === "/token/token") {
         if (body.grant_type === "authorization_code") {
@@ -96,7 +187,15 @@ export async function startFakeGoogle(port = 0): Promise<FakeGoogle> {
           const [, sub = "sub-1", email = "owner@example.test"] = String(body.code).split(":");
           const scope = String(body.code).includes("noscope")
             ? "openid https://www.googleapis.com/auth/userinfo.email"
-            : `openid https://www.googleapis.com/auth/userinfo.email ${String(body.code).includes("readonly") ? "https://www.googleapis.com/auth/webmasters.readonly" : "https://www.googleapis.com/auth/webmasters"}`;
+            : `openid https://www.googleapis.com/auth/userinfo.email ${
+                String(body.code).includes("ga4")
+                  ? "https://www.googleapis.com/auth/analytics.readonly"
+                  : String(body.code).includes("ads")
+                    ? "https://www.googleapis.com/auth/adwords"
+                    : String(body.code).includes("readonly")
+                      ? "https://www.googleapis.com/auth/webmasters.readonly"
+                      : "https://www.googleapis.com/auth/webmasters"
+              }`;
           // Google often sends no refresh token when the account already granted access.
           const refresh = String(body.code).includes("norefresh") ? {} : { refresh_token: `rt-${sub}` };
           return send(200, { access_token: `at-${++issued}`, expires_in: 3599, ...refresh, scope, token_type: "Bearer", id_token: idToken(sub, email) });
@@ -136,6 +235,31 @@ export async function startFakeGoogle(port = 0): Promise<FakeGoogle> {
         if (String(body.inspectionUrl).includes("not-indexed")) return send(200, { inspectionResult: { indexStatusResult: { verdict: "NEUTRAL", coverageState: "Crawled - currently not indexed", lastCrawlTime: "2026-10-01T08:00:00Z" } } });
         return send(200, { inspectionResult: { inspectionResultLink: "https://search.google.com/x", indexStatusResult: { verdict: "PASS", coverageState: "Submitted and indexed", indexingState: "INDEXING_ALLOWED", robotsTxtState: "ALLOWED", pageFetchState: "SUCCESSFUL", lastCrawlTime: "2026-10-10T08:00:00Z", googleCanonical: body.inspectionUrl, userCanonical: body.inspectionUrl } } });
       }
+      // ── Google Analytics 4 ──
+      if (path === "/admin/v1beta/accountSummaries") {
+        return send(200, { accountSummaries: [{ account: "accounts/1", displayName: "Acme Inc", propertySummaries: [{ property: "properties/123", displayName: "acme.com - GA4" }, { property: "properties/456", displayName: "Old site" }] }] });
+      }
+      if (path === "/admin/v1beta/properties/123") return send(200, { name: "properties/123", displayName: "acme.com - GA4", timeZone: "Europe/Istanbul", currencyCode: "TRY" });
+      if (path === "/data/v1beta/properties/123:runReport") return send(200, ga4Report(body));
+
+      // ── Google Ads ──
+      const ads = path.match(/^\/ads\/v\d+\/customers(?::listAccessibleCustomers|\/(\d+)\/googleAds:search)$/);
+      if (ads) {
+        if (!ads[1]) return send(200, { resourceNames: ["customers/1112223333", "customers/4445556666", "customers/9990001111"] });
+        const customerId = ads[1];
+        const customer = ADS_CUSTOMERS[customerId];
+        const permission = (message: string) =>
+          send(403, { error: { code: 403, message: "The caller does not have permission", status: "PERMISSION_DENIED", details: [{ "@type": "type.googleapis.com/google.ads.googleads.v26.errors.GoogleAdsFailure", errors: [{ errorCode: { authorizationError: "USER_PERMISSION_DENIED" }, message }] }] } });
+        if (!customer) return permission("The customer account can't be accessed because it is not yet enabled or has been deactivated.");
+        const throughManager = loginCustomerId === "1112223333" && customer.viaManager;
+        const directly = customer.direct && (!loginCustomerId || loginCustomerId === customerId);
+        if (!throughManager && !directly) return permission("User doesn't have permission to access customer. Note: If you're accessing a client customer, the manager's customer id must be set in the 'login-customer-id' header.");
+        const results = adsSearch(customerId, String(body.query ?? ""));
+        const start = body.pageToken ? Number(String(body.pageToken).replace("page-", "")) : 0;
+        const next = start + ADS_PAGE < results.length ? { nextPageToken: `page-${start + ADS_PAGE}` } : {};
+        return send(200, { results: results.slice(start, start + ADS_PAGE), fieldMask: "", ...next });
+      }
+
       return send(404, { error: { code: 404, message: `No fake for ${path}` } });
     });
   });

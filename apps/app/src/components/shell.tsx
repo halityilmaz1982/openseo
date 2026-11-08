@@ -1,7 +1,7 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { Activity, BarChart3, Bot, ChevronLeft, ClipboardCheck, FolderKanban, Gauge, Globe, KeyRound, LayoutDashboard, Link2, LogOut, MapPin, Menu, Network, ScanSearch, Search, Settings, SlidersHorizontal, Sparkles, Star, Swords, TrendingUp, Wrench, X } from "lucide-react";
+import { Activity, BarChart3, LineChart, Megaphone, Bot, ChevronLeft, ClipboardCheck, FolderKanban, Gauge, Globe, KeyRound, LayoutDashboard, Link2, LogOut, MapPin, Menu, Network, ScanSearch, Search, Settings, SlidersHorizontal, Sparkles, Star, Swords, TrendingUp, Wrench, X } from "lucide-react";
 import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -25,6 +25,9 @@ const projectNav = [
   { href: "/rank", label: "Rank tracking", icon: TrendingUp },
   { href: "/serp-features", label: "AI Overviews", icon: Sparkles },
   { href: "/search", label: "Search performance", icon: BarChart3 },
+  // TEY fork: Google Analytics 4 and Google Ads reports.
+  { href: "/analytics", label: "Analytics", icon: LineChart },
+  { href: "/ads", label: "Google Ads", icon: Megaphone },
   { href: "/domain", label: "Domain overview", icon: Globe },
   { href: "/compare", label: "Traffic and authority", icon: Network },
   { href: "/backlinks", label: "Backlinks", icon: Link2 },

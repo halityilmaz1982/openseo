@@ -28,7 +28,7 @@ import {
   startLink,
 } from "../services/google";
 
-const provider = z.enum(["gsc"]);
+const provider = z.enum(["gsc", "ga4", "ads"]);
 const range = z.enum(Object.keys(RANGES) as [keyof typeof RANGES, ...(keyof typeof RANGES)[]]).default("last_28_days");
 const match = z.enum(["contains", "equals"]).default("contains");
 
@@ -128,8 +128,7 @@ export async function googleRoutes(app: FastifyInstance) {
   app.delete<{ Params: { projectId: string; provider: string } }>("/projects/:projectId/google/:provider", async (request) => {
     const user = await requireSessionUser(request);
     const project = await requireProject(user.id, request.params.projectId);
-    parse(provider, request.params.provider);
-    await disconnect(project);
+    await disconnect(project, parse(provider, request.params.provider) as GoogleProvider);
     return { ok: true };
   });
 

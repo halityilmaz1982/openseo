@@ -20,7 +20,7 @@ function ProjectSettings() {
 
   return (
     <>
-      <PageHeader title="Project settings" description="The project's website and market, and the Google connection it reads from." />
+      <PageHeader title="Project settings" description="The project's website and market, and the Google connections it reads from." />
       <div className="space-y-6">
         {project.data && <ProjectDetails key={`${project.data.id}:${project.data.locationCode}:${project.data.country}`} project={project.data} />}
         <ErrorNote error={project.error} />
@@ -30,12 +30,16 @@ function ProjectSettings() {
         <ErrorNote error={google.error} />
         {state && !state.configured && (
           <EmptyState title="Google is not set up on this server">
-            Whoever runs this OpenSEO needs a Google OAuth client: set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, with this redirect URI: {state.redirectUris.gsc}. The self-hosting docs walk through it.
+            Whoever runs this OpenSEO needs a Google OAuth client: set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, with these redirect URIs: {state.redirectUris.gsc}, {state.redirectUris.ga4} and {state.redirectUris.ads}. The self-hosting docs walk through it.
           </EmptyState>
         )}
         {state?.configured && (
           <>
             <ProviderCard projectId={projectId} provider="gsc" state={state} />
+            <div className="grid gap-5 lg:grid-cols-2 [&>*]:min-w-0">
+              <ProviderCard projectId={projectId} provider="ga4" state={state} />
+              <ProviderCard projectId={projectId} provider="ads" state={state} />
+            </div>
             {state.gsc && !state.gsc.canWrite && (
               <Note>
                 This Search Console connection is read-only, from before OpenSEO could submit sitemaps. Everything works; to let the Indexing page submit sitemaps to Google,{" "}
@@ -48,7 +52,7 @@ function ProjectSettings() {
             <GoogleAccountsCard />
             <p className="flex items-center gap-1.5 text-xs text-muted">
               <ExternalLink className="size-3.5" aria-hidden />
-              Search Console data is synced into this project daily (up to 16 months back) so keyword suggestions, rank tracking and indexing can use it. Disconnecting deletes it.
+              Search Console data is synced into this project daily (up to 16 months back) so keyword suggestions, rank tracking and indexing can use it. Disconnecting deletes it. Analytics and Ads are read from Google live and nothing of theirs is stored; Ads access is read only.
             </p>
           </>
         )}

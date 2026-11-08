@@ -10,16 +10,71 @@ import { Badge, Button, Card, CardHeader, ErrorNote, Field, Select } from "@/com
 import { api, dateOnly } from "@/lib/api";
 import { track } from "@/lib/analytics";
 
-export type Provider = "gsc";
+// TEY fork: Google Analytics 4 and Google Ads next to Search Console.
+export type Provider = "gsc" | "ga4" | "ads";
 export type GoogleAccount = { id: string; provider: Provider; email: string | null; createdAt: string };
 export type GoogleState = {
   configured: boolean;
   redirectUris: Record<Provider, string>;
   gsc: { siteUrl: string; accountId: string; email: string | null; canWrite: boolean; sync: SyncState; createdAt: string } | null;
+  ga4: { propertyId: string; displayName: string; timeZone: string | null; currencyCode: string | null; accountId: string; email: string | null; createdAt: string } | null;
+  ads: { customerId: string; loginCustomerId: string; descriptiveName: string; timeZone: string | null; currencyCode: string | null; accountId: string; email: string | null; createdAt: string } | null;
   accounts: GoogleAccount[];
 };
 
-export const PRODUCT: Record<Provider, string> = { gsc: "Google Search Console" };
+export const PRODUCT: Record<Provider, string> = { gsc: "Google Search Console", ga4: "Google Analytics", ads: "Google Ads" };
+const DESCRIPTION: Record<Provider, string> = {
+  gsc: "Clicks, impressions and positions from Google itself.",
+  ga4: "What visitors do on the site: sessions, channels, key events and revenue.",
+  ads: "Spend, clicks, conversions and search terms of one ad account, read only.",
+};
+const PICK_LABEL: Record<Provider, string> = { gsc: "Property", ga4: "GA4 property", ads: "Ad account" };
+
+/** Ten-digit Google Ads IDs the way Google Ads shows them: 123-456-7890. */
+export const dashed = (id: string) => id.replace(/^(\d{3})(\d{3})(\d{4})$/, "$1-$2-$3");
+
+type Option = { id: string; label: string; disabled: boolean };
+type AdsCustomer = { customerId: string; descriptiveName: string; loginCustomerId: string; managerName: string | null; currencyCode: string | null; testAccount: boolean };
+
+/** What a project can choose from in one Google account: properties, or ad accounts with the manager they go through. */
+async function loadOptions(projectId: string, provider: Provider, accountId: string): Promise<Option[]> {
+  if (provider === "ga4") {
+    const rows = await api<{ propertyId: string; displayName: string; account: string }[]>(`/projects/${projectId}/google/ga4/properties`, { query: { accountId } });
+    return rows.map((r) => ({ id: r.propertyId, label: `${r.displayName} (${r.account}, ${r.propertyId.replace("properties/", "")})`, disabled: false }));
+  }
+  if (provider === "ads") {
+    const rows = await api<AdsCustomer[]>(`/projects/${projectId}/google/ads/customers`, { query: { accountId } });
+    return rows.map((r) => ({
+      id: `${r.customerId}|${r.loginCustomerId}`,
+      label: `${r.descriptiveName} (${dashed(r.customerId)}${r.currencyCode ? `, ${r.currencyCode}` : ""})${r.managerName ? ` via ${r.managerName}` : ""}${r.testAccount ? " · test account" : ""}`,
+      disabled: false,
+    }));
+  }
+  const rows = await api<{ siteUrl: string; verified: boolean }[]>(`/projects/${projectId}/google/gsc/sites`, { query: { accountId } });
+  // A domain property and a URL-prefix property for the same site would read the same.
+  const labels = rows.map((r) => propertyLabel(r.siteUrl));
+  return rows.map((r, i) => ({
+    id: r.siteUrl,
+    label: labels.indexOf(labels[i]!) !== labels.lastIndexOf(labels[i]!) && !r.siteUrl.startsWith("sc-domain:") ? `${labels[i]} (URL prefix)` : labels[i]!,
+    disabled: !r.verified,
+  }));
+}
+
+function choiceBody(provider: Provider, accountId: string, choice: string) {
+  if (provider === "ga4") return { accountId, propertyId: choice };
+  if (provider === "ads") {
+    const [customerId, loginCustomerId] = choice.split("|");
+    return { accountId, customerId, loginCustomerId };
+  }
+  return { accountId, siteUrl: choice };
+}
+
+/** How the connected property or account reads on its card. */
+function connectionLabel(provider: Provider, state: GoogleState): string | null {
+  if (provider === "ga4") return state.ga4 ? `${state.ga4.displayName} (${state.ga4.propertyId.replace("properties/", "")})` : null;
+  if (provider === "ads") return state.ads ? `${state.ads.descriptiveName} (${dashed(state.ads.customerId)})` : null;
+  return state.gsc ? propertyLabel(state.gsc.siteUrl) : null;
+}
 export const LINK_ERRORS: Record<string, string> = {
   state_mismatch: "The connection link expired or was opened in another session. Try again from this page.",
   access_denied: "Google access was not granted.",
@@ -54,24 +109,15 @@ function PropertyPicker({ projectId, provider, accounts, onDone }: { projectId: 
   const [choice, setChoice] = useState("");
   const options = useQuery({
     queryKey: ["google-options", projectId, provider, accountId],
-    queryFn: () =>
-      api<{ siteUrl: string; verified: boolean }[]>(`/projects/${projectId}/google/${provider}/sites`, { query: { accountId } }).then((rows) => {
-        // A domain property and a URL-prefix property for the same site would read the same.
-        const labels = rows.map((r) => propertyLabel(r.siteUrl));
-        return rows.map((r, i) => ({
-          id: r.siteUrl,
-          label: labels.indexOf(labels[i]!) !== labels.lastIndexOf(labels[i]!) && !r.siteUrl.startsWith("sc-domain:") ? `${labels[i]} (URL prefix)` : labels[i]!,
-          disabled: !r.verified,
-        }));
-      }),
+    queryFn: () => loadOptions(projectId, provider, accountId),
     enabled: Boolean(accountId),
   });
   const save = useMutation({
-    mutationFn: () => api(`/projects/${projectId}/google/${provider}`, { method: "PUT", body: { accountId, siteUrl: choice } }),
+    mutationFn: () => api(`/projects/${projectId}/google/${provider}`, { method: "PUT", body: choiceBody(provider, accountId, choice) }),
     onSuccess: () => {
-      track("search_console_property_selected", { project_id: projectId });
+      track(provider === "gsc" ? "search_console_property_selected" : `google_${provider}_selected`, { project_id: projectId });
       void queryClient.invalidateQueries({ queryKey: ["google", projectId] });
-      void queryClient.invalidateQueries({ queryKey: ["search", projectId] });
+      void queryClient.invalidateQueries({ queryKey: [provider === "gsc" ? "search" : provider, projectId] });
       onDone();
     },
   });
@@ -98,7 +144,10 @@ function PropertyPicker({ projectId, provider, accounts, onDone }: { projectId: 
           ))}
         </Select>
       </Field>
-      <Field label="Property" hint="Properties without verified access are listed but cannot be chosen.">
+      <Field
+        label={PICK_LABEL[provider]}
+        hint={provider === "gsc" ? "Properties without verified access are listed but cannot be chosen." : provider === "ads" ? "Accounts under a manager account (MCC) are read through it." : undefined}
+      >
         <Select value={choice} onChange={(event) => setChoice(event.target.value)} disabled={!options.data?.length}>
           <option value="">{options.isPending ? "Loading…" : options.data?.length ? "Choose…" : "None in this account"}</option>
           {options.data?.map((option) => (
@@ -111,7 +160,7 @@ function PropertyPicker({ projectId, provider, accounts, onDone }: { projectId: 
       </Field>
       <div className="flex flex-wrap gap-2 sm:col-span-2">
         <Button type="submit" variant="primary" disabled={!choice} loading={save.isPending}>
-          Use this property
+          {provider === "ads" ? "Use this account" : "Use this property"}
         </Button>
         <Button variant="ghost" onClick={onDone}>
           Cancel
@@ -134,18 +183,18 @@ export function ProviderCard({ projectId, provider, state }: { projectId: string
   const disconnect = useMutation({
     mutationFn: () => api(`/projects/${projectId}/google/${provider}`, { method: "DELETE" }),
     onSuccess: () => {
-      track("search_console_disconnected", { project_id: projectId });
+      track(provider === "gsc" ? "search_console_disconnected" : `google_${provider}_disconnected`, { project_id: projectId });
       setConfirming(false);
       void queryClient.invalidateQueries({ queryKey: ["google", projectId] });
     },
   });
-  const label = connection ? propertyLabel(connection.siteUrl) : null;
+  const label = connectionLabel(provider, state);
 
   return (
     <Card>
       <CardHeader
         title={PRODUCT[provider]}
-        description="Clicks, impressions and positions from Google itself."
+        description={DESCRIPTION[provider]}
         action={<Badge tone={connection ? "pos" : "neutral"}>{connection ? "Connected" : "Not connected"}</Badge>}
       />
       <div className="space-y-3 p-4 text-[13px]">
@@ -157,7 +206,7 @@ export function ProviderCard({ projectId, provider, state }: { projectId: string
             </p>
             <div className="flex flex-wrap gap-2">
               <Button size="sm" onClick={() => setPicking(true)}>
-                Change property
+                {provider === "ads" ? "Change account" : "Change property"}
               </Button>
               <Button size="sm" variant="ghost" onClick={() => setConfirming(true)}>
                 Disconnect from this project
@@ -189,7 +238,10 @@ export function ProviderCard({ projectId, provider, state }: { projectId: string
         pending={disconnect.isPending}
         error={disconnect.error}
       >
-        <p>This project stops reading {label ?? "this property"} and its synced Search Console data is deleted. The Google account stays connected, so you can pick the property again later.</p>
+        <p>
+          This project stops reading {label ?? "this property"}
+          {provider === "gsc" ? " and its synced Search Console data is deleted" : ""}. The Google account stays connected, so you can pick it again later.
+        </p>
       </ConfirmDialog>
     </Card>
   );

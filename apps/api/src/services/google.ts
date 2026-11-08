@@ -7,6 +7,9 @@
  *   was issued to
  * - PKCE, with the verifier derived from the state by HMAC, so it never needs storing
  * - tokens encrypted with ENCRYPTION_KEY; a refresh token Google leaves out of a later grant is kept
+ * TEY fork: Google Analytics 4 (analytics.readonly, services/analytics.ts) and Google Ads (adwords,
+ * services/ads.ts) connect the same way, each as its own grant, and read Google live.
+ *
  * Google calls are free and never touch the YepAPI budget. Reports read Google live; the daily
  * sync (gsc-sync.ts) and URL inspections (indexing.ts) store what they read in the project database,
  * and disconnecting deletes it.
@@ -22,9 +25,13 @@ import { AppError, badRequest, notFound } from "../lib/errors";
 type Project = typeof schema.projects.$inferSelect;
 type Account = typeof schema.googleAccounts.$inferSelect;
 
-export const PROVIDERS: GoogleProvider[] = ["gsc"];
-export const PRODUCT: Record<GoogleProvider, string> = { gsc: "Google Search Console" };
-const SCOPE: Record<GoogleProvider, string> = { gsc: "https://www.googleapis.com/auth/webmasters" };
+export const PROVIDERS: GoogleProvider[] = ["gsc", "ga4", "ads"];
+export const PRODUCT: Record<GoogleProvider, string> = { gsc: "Google Search Console", ga4: "Google Analytics", ads: "Google Ads" };
+const SCOPE: Record<GoogleProvider, string> = {
+  gsc: "https://www.googleapis.com/auth/webmasters",
+  ga4: "https://www.googleapis.com/auth/analytics.readonly",
+  ads: "https://www.googleapis.com/auth/adwords",
+};
 const GSC_READONLY = "https://www.googleapis.com/auth/webmasters.readonly";
 
 const HOSTS = {
@@ -32,9 +39,14 @@ const HOSTS = {
   token: "https://oauth2.googleapis.com",
   webmasters: "https://www.googleapis.com",
   searchconsole: "https://searchconsole.googleapis.com",
+  admin: "https://analyticsadmin.googleapis.com",
+  data: "https://analyticsdata.googleapis.com",
+  ads: "https://googleads.googleapis.com",
 } as const;
 
-function googleUrl(host: keyof typeof HOSTS, path: string): string {
+export type GoogleHost = keyof typeof HOSTS;
+
+function googleUrl(host: GoogleHost, path: string): string {
   return env.GOOGLE_API_BASE_URL ? `${env.GOOGLE_API_BASE_URL.replace(/\/+$/, "")}/${host}${path}` : `${HOSTS[host]}${path}`;
 }
 
@@ -42,14 +54,17 @@ function googleUrl(host: keyof typeof HOSTS, path: string): string {
 
 export const googleNotConfigured = () =>
   new AppError(503, "google_not_configured", "Google is not set up on this server. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET (see the self-hosting docs).");
-const notConnected = (provider: GoogleProvider) =>
-  new AppError(409, "google_not_connected", `Connect ${PRODUCT[provider]} to this project first, under Search performance.`, { provider });
+export const notConnected = (provider: GoogleProvider) =>
+  new AppError(409, "google_not_connected", `Connect ${PRODUCT[provider]} to this project first, under ${provider === "gsc" ? "Search performance" : "Project settings"}.`, { provider });
 const reconnect = (provider: GoogleProvider) =>
   new AppError(409, "google_reconnect_required", `Google access for ${PRODUCT[provider]} has expired or was revoked. Reconnect the account.`, { provider });
 
 export function googleConfigured(): boolean {
   return Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
 }
+
+/** Throws google_not_configured when the server has no OAuth client. */
+export const assertGoogleConfigured = () => void config();
 
 function config() {
   if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) throw googleNotConfigured();
@@ -226,18 +241,33 @@ async function accessToken(account: Account): Promise<string> {
 /** Whether a Search Console grant can write (submit sitemaps), not just read. */
 export const canWriteGsc = (account: Pick<Account, "scope">) => (account.scope ?? "").split(" ").includes(SCOPE.gsc);
 
-/** One Google API call with the account's token; errors become app errors with a next step. */
-export async function googleCall<T>(account: Account, host: keyof typeof HOSTS, path: string, body?: unknown, method?: "GET" | "POST" | "PUT" | "DELETE"): Promise<T> {
+type GoogleErrorBody = { error?: { message?: string; status?: string; details?: { errors?: { message?: string }[] }[] } };
+
+/**
+ * One Google API call with the account's token; errors become app errors with a next step.
+ * `headers` carries what one API needs on top (Google Ads: login-customer-id).
+ */
+export async function googleCall<T>(
+  account: Account,
+  host: GoogleHost,
+  path: string,
+  body?: unknown,
+  method?: "GET" | "POST" | "PUT" | "DELETE",
+  headers: Record<string, string> = {},
+): Promise<T> {
   const token = await accessToken(account);
   const res = await fetch(googleUrl(host, path), {
     method: method ?? (body === undefined ? "GET" : "POST"),
-    headers: { authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+    headers: { ...headers, authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: AbortSignal.timeout(30_000),
   });
-  const json = (await res.json().catch(() => ({}))) as { error?: { message?: string; status?: string } } & T;
+  const json = (await res.json().catch(() => ({}))) as GoogleErrorBody & T;
   if (res.ok) return json;
-  const message = json.error?.message ?? `HTTP ${res.status}`;
+  // Google Ads puts the useful text in details ("…set the manager's customer id in login-customer-id");
+  // its top-level message only says the argument was invalid or permission was denied.
+  const detail = json.error?.details?.flatMap((d) => d.errors ?? []).find((e) => e.message)?.message;
+  const message = detail ?? json.error?.message ?? `HTTP ${res.status}`;
   if (res.status === 401) throw reconnect(account.provider);
   if (res.status === 403) throw new AppError(403, "google_permission", `Google refused access: ${message}`);
   if (res.status === 429) throw new AppError(429, "google_quota", `Google's API quota is used up for now. Try again later. (${message})`);
@@ -255,7 +285,7 @@ export async function listAccounts(userId: string) {
     .orderBy(schema.googleAccounts.createdAt);
 }
 
-async function ownAccount(userId: string, accountId: string, provider: GoogleProvider): Promise<Account> {
+export async function ownAccount(userId: string, accountId: string, provider: GoogleProvider): Promise<Account> {
   const [account] = await db
     .select()
     .from(schema.googleAccounts)
@@ -280,7 +310,9 @@ export async function removeAccount(userId: string, accountId: string): Promise<
   const lost = await dataDb.transaction(async (tx) => {
     const gsc = await tx.delete(schema.gscConnections).where(eq(schema.gscConnections.googleAccountId, account.id)).returning({ id: schema.gscConnections.projectId });
     for (const { id } of gsc) await deleteStoredGsc(tx, id);
-    return gsc.length;
+    const ga4 = await tx.delete(schema.ga4Connections).where(eq(schema.ga4Connections.googleAccountId, account.id)).returning({ id: schema.ga4Connections.projectId });
+    const ads = await tx.delete(schema.adsConnections).where(eq(schema.adsConnections.googleAccountId, account.id)).returning({ id: schema.adsConnections.projectId });
+    return new Set([...gsc, ...ga4, ...ads].map((row) => row.id)).size;
   });
   await db.delete(schema.googleAccounts).where(eq(schema.googleAccounts.id, account.id));
   return { projects: lost };
@@ -325,7 +357,9 @@ async function deleteStoredGsc(tx: Tx, projectId: string) {
     .where(eq(schema.sitePages.projectId, projectId));
 }
 
-export async function disconnect(project: Project) {
+export async function disconnect(project: Project, provider: GoogleProvider = "gsc") {
+  if (provider === "ga4") return void (await dataDb.delete(schema.ga4Connections).where(eq(schema.ga4Connections.projectId, project.id)));
+  if (provider === "ads") return void (await dataDb.delete(schema.adsConnections).where(eq(schema.adsConnections.projectId, project.id)));
   await dataDb.transaction(async (tx) => {
     await tx.delete(schema.gscConnections).where(eq(schema.gscConnections.projectId, project.id));
     await deleteStoredGsc(tx, project.id);
@@ -333,12 +367,12 @@ export async function disconnect(project: Project) {
 }
 
 /** The Google account a connection reads through (core database), by id. */
-async function accountById(id: string) {
+export async function accountById(id: string) {
   const [account] = await db.select().from(schema.googleAccounts).where(eq(schema.googleAccounts.id, id)).limit(1);
   return account ?? null;
 }
 
-/** The project's Search Console connection, with the email of the Google account it reads through. */
+/** The project's Google connections, with the email of the Google account each one reads through. */
 export async function connections(project: Project) {
   const [gscRow] = await dataDb.select().from(schema.gscConnections).where(eq(schema.gscConnections.projectId, project.id)).limit(1);
   const gscAccount = gscRow ? await accountById(gscRow.googleAccountId) : null;
@@ -354,7 +388,28 @@ export async function connections(project: Project) {
           createdAt: gscRow.createdAt,
         }
       : null;
-  return { gsc };
+  const [ga4Row] = await dataDb.select().from(schema.ga4Connections).where(eq(schema.ga4Connections.projectId, project.id)).limit(1);
+  const ga4Account = ga4Row ? await accountById(ga4Row.googleAccountId) : null;
+  const ga4 =
+    ga4Row && ga4Account
+      ? { propertyId: ga4Row.propertyId, displayName: ga4Row.displayName, timeZone: ga4Row.timeZone, currencyCode: ga4Row.currencyCode, accountId: ga4Row.googleAccountId, email: ga4Account.email, createdAt: ga4Row.createdAt }
+      : null;
+  const [adsRow] = await dataDb.select().from(schema.adsConnections).where(eq(schema.adsConnections.projectId, project.id)).limit(1);
+  const adsAccount = adsRow ? await accountById(adsRow.googleAccountId) : null;
+  const ads =
+    adsRow && adsAccount
+      ? {
+          customerId: adsRow.customerId,
+          loginCustomerId: adsRow.loginCustomerId,
+          descriptiveName: adsRow.descriptiveName,
+          timeZone: adsRow.timeZone,
+          currencyCode: adsRow.currencyCode,
+          accountId: adsRow.googleAccountId,
+          email: adsAccount.email,
+          createdAt: adsRow.createdAt,
+        }
+      : null;
+  return { gsc, ga4, ads };
 }
 
 export async function gscFor(project: Pick<Project, "id">) {

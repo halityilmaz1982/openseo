@@ -198,7 +198,7 @@ function buildServer(app: FastifyInstance, authorization: string): McpServer {
       } catch (error) {
         const message = error instanceof Error ? error.message : "Tool failed";
         // The REST message points to the dashboard; an agent also needs the tool that checks it.
-        if (/^Connect Google Search Console/.test(message)) return fail(`${message} Check with get_google_connections; only the user can connect Google, in the OpenSEO dashboard.`);
+        if (/^Connect Google (Search Console|Analytics|Ads)/.test(message)) return fail(`${message} Check with get_google_connections; only the user can connect Google, in the OpenSEO dashboard.`);
         return fail(message);
       }
     }) as never);
@@ -647,11 +647,11 @@ function buildServer(app: FastifyInstance, authorization: string): McpServer {
   };
   tool(
     "get_google_connections",
-    "Whether the project has Google Search Console connected, and which property. If not, ask the user to connect it in the dashboard under Search performance; agents cannot connect it.",
+    "Whether the project has Google Search Console, Google Analytics 4 and Google Ads connected, and which property or ad account. If not, ask the user to connect them in the dashboard under Project settings; agents cannot connect them.",
     { project_id: projectId },
     async (a) => {
       const data = (await rest("GET", `/projects/${await resolveProject(a.project_id)}/google`)) as Json;
-      return { configured: data.configured, gsc: data.gsc };
+      return { configured: data.configured, gsc: data.gsc, ga4: data.ga4, ads: data.ads };
     },
     true,
   );
@@ -698,6 +698,67 @@ function buildServer(app: FastifyInstance, authorization: string): McpServer {
     "Pages ranking at positions 4 to 20 in Search Console, scored 0 to 100 for where a push is most worth it: 0.7 demand (impressions) and 0.3 reachability (how close to the top). Needs Search Console. Free.",
     { project_id: projectId, range },
     async (a) => rest("GET", `/projects/${await resolveProject(a.project_id)}/search-opportunities?range=${a.range ?? "last_28_days"}`),
+    true,
+  );
+
+  // ── TEY fork: Google Analytics 4 and Google Ads (free, read only; the user connects them in the dashboard) ──
+  const ga4Range = z.enum(["last_7_days", "last_28_days", "last_3_months"]).optional().describe("Default last_28_days. Complete days ending yesterday, in the property's or ad account's time zone.");
+  const ga4Channel = z.enum(["all", "organic", "paid"]).optional().describe("Default all. paid = GA4's paid channel groups (Paid Search, Paid Social, Paid Shopping, Display…).");
+  const pid = async (id: string | undefined) => resolveProject(id);
+  tool(
+    "get_analytics_overview",
+    "Google Analytics 4 sessions, active users, engaged sessions, engagement rate, key events, transactions and purchase revenue for the period against the one before, with a daily series. Filter to organic or paid channels. Free.",
+    { project_id: projectId, range: ga4Range, channel: ga4Channel },
+    async (a) => rest("GET", `/projects/${await pid(a.project_id)}/analytics/overview?${new URLSearchParams({ range: a.range ?? "last_28_days", channel: a.channel ?? "all" })}`),
+    true,
+  );
+  tool(
+    "get_analytics_channels",
+    "Google Analytics 4 sessions, engagement, key events, transactions and revenue per default channel group (Organic Search, Paid Search, Paid Social, Direct, Referral…), with which groups are paid. Free.",
+    { project_id: projectId, range: ga4Range },
+    async (a) => rest("GET", `/projects/${await pid(a.project_id)}/analytics/channels?range=${a.range ?? "last_28_days"}`),
+    true,
+  );
+  tool(
+    "get_analytics_sources",
+    "Google Analytics 4 sessions by source, medium and campaign name, with key events, transactions and revenue: which campaign brought visitors who bought. Free.",
+    { project_id: projectId, range: ga4Range, channel: ga4Channel, limit: z.number().int().min(1).max(1000).optional().describe("Default 100") },
+    async (a) => rest("GET", `/projects/${await pid(a.project_id)}/analytics/sources?${new URLSearchParams({ range: a.range ?? "last_28_days", channel: a.channel ?? "all", limit: String(a.limit ?? 100) })}`),
+    true,
+  );
+  tool(
+    "get_analytics_landing_pages",
+    "Google Analytics 4 landing pages by sessions, with engagement, key events, key-event rate and revenue. Filter to organic or paid channels. Free.",
+    { project_id: projectId, range: ga4Range, channel: ga4Channel, limit: z.number().int().min(1).max(1000).optional().describe("Default 100") },
+    async (a) => rest("GET", `/projects/${await pid(a.project_id)}/analytics/landing-pages?${new URLSearchParams({ range: a.range ?? "last_28_days", channel: a.channel ?? "all", limit: String(a.limit ?? 100) })}`),
+    true,
+  );
+  tool(
+    "get_ads_overview",
+    "Google Ads spend, clicks, impressions, conversions and conversion value of the project's ad account for the period against the one before, with CTR, cost per click, cost per conversion, ROAS and a daily series. Read only. Free.",
+    { project_id: projectId, range: ga4Range },
+    async (a) => rest("GET", `/projects/${await pid(a.project_id)}/ads/overview?range=${a.range ?? "last_28_days"}`),
+    true,
+  );
+  tool(
+    "get_ads_campaigns",
+    "Google Ads campaigns with activity in the period, most spend first: status, type, daily budget, spend, clicks, conversions, value, cost per conversion and ROAS. Read only. Free.",
+    { project_id: projectId, range: ga4Range },
+    async (a) => rest("GET", `/projects/${await pid(a.project_id)}/ads/campaigns?range=${a.range ?? "last_28_days"}`),
+    true,
+  );
+  tool(
+    "get_ads_search_terms",
+    "What people searched before clicking the project's Search ads, most spend first, with campaign, ad group, whether the term is a keyword or excluded, and a flag for terms that cost money and converted nothing (negative-keyword candidates). Performance Max terms are not included. Read only. Free.",
+    { project_id: projectId, range: ga4Range, limit: z.number().int().min(1).max(1000).optional().describe("Default 200") },
+    async (a) => rest("GET", `/projects/${await pid(a.project_id)}/ads/search-terms?${new URLSearchParams({ range: a.range ?? "last_28_days", limit: String(a.limit ?? 200) })}`),
+    true,
+  );
+  tool(
+    "get_ads_campaign_daily",
+    "Google Ads spend, clicks, impressions, conversions and value per campaign per day between two dates (YYYY-MM-DD, at most 93 days), in the ad account's time zone. Read only. Free.",
+    { project_id: projectId, from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) },
+    async (a) => rest("GET", `/projects/${await pid(a.project_id)}/ads/campaign-daily?${new URLSearchParams({ from: a.from, to: a.to })}`),
     true,
   );
 
