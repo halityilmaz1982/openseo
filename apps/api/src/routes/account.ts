@@ -73,7 +73,8 @@ export async function accountRoutes(app: FastifyInstance) {
 
   app.put("/settings/budget", async (request) => {
     const user = await requireSessionUser(request);
-    const { monthlyBudgetUsd } = parse(z.object({ monthlyBudgetUsd: z.number().positive().max(100000).nullable() }), request.body);
+    // TEY fork: 0 is allowed and turns paid calls off; free tools keep working (lib/yep.ts).
+    const { monthlyBudgetUsd } = parse(z.object({ monthlyBudgetUsd: z.number().min(0).max(100000).nullable() }), request.body);
     await db
       .insert(schema.userSettings)
       .values({ userId: user.id, monthlyBudgetUsd })

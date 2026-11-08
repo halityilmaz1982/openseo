@@ -32,6 +32,19 @@ describe("monthly budget", () => {
     expect((await api.ok("GET", "/balance")).balanceUsd).toBe(5);
   });
 
+  it("turns paid calls off with a limit of 0 and keeps free ones working (TEY fork)", async () => {
+    const { api, project } = await readyUser();
+    await api.ok("PUT", "/settings/budget", { monthlyBudgetUsd: 0 });
+    expect((await api.ok("GET", "/me")).settings.monthlyBudgetUsd).toBe(0);
+    const before = harness.fake.requests.length;
+    const res = await api.post(`/projects/${project.id}/lookups/backlinks_summary`, { target: "a.com" });
+    expect(res.status).toBe(402);
+    expect(res.body.error).toMatchObject({ code: "budget_reached" });
+    expect(harness.fake.requests.length).toBe(before);
+    expect((await api.ok("POST", `/projects/${project.id}/lookups/backlinks_summary?dryRun=1`, { target: "a.com" })).dryRun).toBe(true);
+    expect((await api.put("/settings/budget", { monthlyBudgetUsd: -1 })).status).toBe(400);
+  });
+
   it("sees spend made by other clients of the same user while a client is in use", async () => {
     const { userId, api } = await readyUser();
     await api.ok("PUT", "/settings/budget", { monthlyBudgetUsd: 0.1 });

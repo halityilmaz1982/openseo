@@ -75,7 +75,8 @@ export function BalancePanel() {
   const data = balance.data;
   const tone = balanceTone(data);
   const month = data?.month;
-  const budgetShare = month?.budgetUsd ? Math.min(1, month.spentUsd / month.budgetUsd) : null;
+  // TEY fork: a limit of 0 means paid calls are off, shown as a full bar.
+  const budgetShare = month?.budgetUsd == null ? null : month.budgetUsd > 0 ? Math.min(1, month.spentUsd / month.budgetUsd) : 1;
 
   return (
     <section aria-label="YepAPI balance" className="mb-2 rounded-lg border border-line bg-bg px-3 py-2.5">
@@ -122,7 +123,7 @@ export function BalancePanel() {
                 <div className={cx("h-full rounded-full", budgetShare >= 1 ? "bg-neg" : budgetShare >= 0.8 ? "bg-warn" : "bg-accent")} style={{ width: `${budgetShare * 100}%` }} />
               </div>
               <p className="mt-1 text-[11px] text-muted">
-                {usd(month.spentUsd)} of {usd(month.budgetUsd)} monthly limit
+                {month.budgetUsd === 0 ? "Paid calls off (limit $0)" : `${usd(month.spentUsd)} of ${usd(month.budgetUsd)} monthly limit`}
               </p>
             </div>
           )}

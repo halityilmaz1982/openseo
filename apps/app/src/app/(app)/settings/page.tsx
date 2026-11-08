@@ -136,7 +136,7 @@ function BudgetCard({ settings }: { settings: Me["settings"] }) {
   });
   return (
     <Card>
-      <CardHeader title="Monthly spending limit" description="OpenSEO stops making paid calls once this month's spend reaches the limit. Leave empty for no limit." />
+      <CardHeader title="Monthly spending limit" description="OpenSEO stops making paid calls once this month's spend reaches the limit. 0 turns paid calls off; free tools keep working. Leave empty for no limit." />
       <form
         className="flex flex-wrap items-end gap-2 p-4"
         onSubmit={(event) => {
@@ -146,7 +146,7 @@ function BudgetCard({ settings }: { settings: Me["settings"] }) {
       >
         <div className="w-40">
           <Field label="Limit (USD)">
-            <Input value={value} onChange={(event) => setValue(event.target.value)} type="number" min="0.01" step="0.01" placeholder="No limit" />
+            <Input value={value} onChange={(event) => setValue(event.target.value)} type="number" min="0" step="0.01" placeholder="No limit" />
           </Field>
         </div>
         <Button type="submit" loading={save.isPending}>
